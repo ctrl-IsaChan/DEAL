@@ -21,6 +21,12 @@ python3 -m http.server 4173
 
 Open http://localhost:4173.
 
+## Public link
+
+After GitHub Pages is enabled and the `Deploy GitHub Pages` workflow finishes, the app is available at:
+
+https://ctrl-IsaChan.github.io/DEAL/
+
 The map uses OpenStreetMap tiles and Leaflet from CDN, so map tiles require internet access. The app itself and GeoJSON data are local.
 
 ## Data note
