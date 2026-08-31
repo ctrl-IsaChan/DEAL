@@ -4,19 +4,36 @@ const toast = document.querySelector('#toast');
 let map;
 
 const parkingLocationCatalog = {
-  yuleStreet: { id: 'yuleStreet', name: '育樂街路邊機車格', location: '育樂街 · 成功大學旁', currentCapacity: 94, source: 'government_data', updatedAt: '2026/08/31' },
-  universityRoad: { id: 'universityRoad', name: '大學路機車停車區', location: '大學路一段 · 東側', currentCapacity: 64, source: 'government_data', updatedAt: '2026/08/31' },
-  lightRestoration: { id: 'lightRestoration', name: '成大光復校區周邊', location: '勝利路 · 光復校區', currentCapacity: 28, source: 'government_data', updatedAt: '2026/08/31' }
+  yuleStreet: { id: 'yuleStreet', name: '育樂街路邊機車格', location: '育樂街 · 成功大學旁', currentCapacity: 94, source: 'government_data', updatedAt: '2026/08/31' }
 };
 const REPORT_STORAGE_KEY = 'deal-parking-reports-v1';
+const MAX_REPORT_PHOTOS = 3;
+const MAX_REPORT_PHOTO_BYTES = 10 * 1024 * 1024;
+const YULE_STREET_ROADSIDE_BOUNDARY = [
+  [120.21315, 22.99705],
+  [120.21810, 22.99665],
+  [120.21770, 22.99555],
+  [120.21295, 22.99595]
+];
+const YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS = { 4: 13, 24: 13 };
+
+function isInsideYuleStreetRoadsideBoundary([longitude, latitude]) {
+  let inside = false;
+  for (let index = 0, previousIndex = YULE_STREET_ROADSIDE_BOUNDARY.length - 1; index < YULE_STREET_ROADSIDE_BOUNDARY.length; previousIndex = index++) {
+    const [currentLongitude, currentLatitude] = YULE_STREET_ROADSIDE_BOUNDARY[index];
+    const [previousLongitude, previousLatitude] = YULE_STREET_ROADSIDE_BOUNDARY[previousIndex];
+    const intersects = currentLatitude > latitude !== previousLatitude > latitude
+      && longitude < (previousLongitude - currentLongitude) * (latitude - currentLatitude) / (previousLatitude - currentLatitude) + currentLongitude;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
 
 function seedReports() {
   const existing = localStorage.getItem(REPORT_STORAGE_KEY);
   if (existing) return;
   const seeded = [
-    { id: 'rpt-001', parking_id: 'yuleStreet', user_id: 'demo-user', current_capacity: 94, reported_capacity: 76, note: '部分停車格已取消，現場標線不一致。', status: 'pending', created_at: '2026-08-31T08:30:00Z', reviewed_at: null, reviewed_by: null, photos: ['https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=600&q=80'], capacity_source: 'user_report_verified' },
-    { id: 'rpt-002', parking_id: 'universityRoad', user_id: 'demo-user', current_capacity: 64, reported_capacity: 82, note: '新增了兩排機車位。', status: 'approved', created_at: '2026-08-21T09:10:00Z', reviewed_at: '2026-08-22T10:15:00Z', reviewed_by: 'admin-demo', photos: [], capacity_source: 'admin_verified' },
-    { id: 'rpt-003', parking_id: 'lightRestoration', user_id: 'demo-user', current_capacity: 28, reported_capacity: 14, note: '現場只剩少數格位。', status: 'rejected', created_at: '2026-08-17T15:05:00Z', reviewed_at: '2026-08-18T09:00:00Z', reviewed_by: 'admin-demo', photos: [], capacity_source: 'government_data' }
+    { id: 'rpt-001', parking_id: 'yuleStreet', user_id: 'demo-user', current_capacity: 94, reported_capacity: 76, note: '部分停車格已取消，現場標線不一致。', status: 'pending', created_at: '2026-08-31T08:30:00Z', reviewed_at: null, reviewed_by: null, photos: ['https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=600&q=80'], capacity_source: 'user_report_verified' }
   ];
   localStorage.setItem(REPORT_STORAGE_KEY, JSON.stringify(seeded));
 }
@@ -24,7 +41,7 @@ function seedReports() {
 function getReports() {
   const raw = localStorage.getItem(REPORT_STORAGE_KEY);
   if (!raw) return [];
-  try { return JSON.parse(raw); } catch (error) { return []; }
+  try { return JSON.parse(raw).filter(report => report.parking_id === 'yuleStreet'); } catch (error) { return []; }
 }
 
 function saveReports(reports) {
@@ -149,26 +166,56 @@ document.querySelectorAll('.add-btn').forEach(button => button.addEventListener(
   if (orderStatus) orderStatus.textContent = 'CART 1';
 }));
 
+function showParkingDetail(observation) {
+  const panel = document.querySelector('.parking-panel');
+  const card = panel.querySelector('.parking-card');
+  const capacity = observation.motorcycleSpaces;
+  card.querySelector('h3').textContent = observation.name;
+  card.querySelector('p').textContent = '育樂街 · 路邊機車位影像觀察';
+  card.querySelector('.parking-meta strong').textContent = `影像觀察候選 ${capacity} 格`;
+  card.querySelector('.parking-meta span').textContent = `資料更新：${parkingLocationCatalog.yuleStreet.updatedAt}`;
+  const reportButton = card.querySelector('.report-link');
+  reportButton.dataset.locationName = observation.name;
+  reportButton.dataset.location = '育樂街 · 路邊機車位影像觀察';
+  reportButton.dataset.currentCapacity = capacity;
+  panel.hidden = false;
+}
+
+function hideParkingDetail() {
+  document.querySelector('.parking-panel').hidden = true;
+}
+
 function initMap() {
   if (map) { map.invalidateSize(); return; }
   map = L.map('map', { zoomControl: false, attributionControl: true }).setView([22.9957, 120.2153], 16);
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
   fetch('detection_points.geojson').then(response => response.json()).then(data => {
-    const aggregate = ParkingAggregationService.aggregate(data.features);
-    const observationFeatures = ParkingAggregationService.clusterForDisplay(data.features).map(point => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] }, properties: { street: '育樂街', motorcycleSpaces: point.motorcycleSpaces, observationCount: point.observationCount } }));
+    const roadsideFeatures = data.features.filter(feature => isInsideYuleStreetRoadsideBoundary(feature.geometry.coordinates));
+    const aggregate = ParkingAggregationService.aggregate(roadsideFeatures);
+    const observationFeatures = ParkingAggregationService.clusterForDisplay(roadsideFeatures).map((point, index) => {
+      const observationArea = index + 1;
+      return {
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] },
+        properties: {
+          name: `育樂街路邊機車位觀察區 ${observationArea}`,
+          motorcycleSpaces: YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS[observationArea] ?? point.motorcycleSpaces,
+          observationCount: point.observationCount
+        }
+      };
+    });
     const layer = L.geoJSON(observationFeatures, { pointToLayer: (feature, latlng) => {
       const count = feature.properties.motorcycleSpaces;
       return L.circleMarker(latlng, { radius: count ? 6 : 4, color: count ? '#ee8066' : '#55aa88', fillColor: count ? '#ee8066' : '#91cbb5', fillOpacity: .78, weight: 1 });
     }, onEachFeature: (feature, layer) => {
-      layer.bindPopup(`<strong>${feature.properties.street}</strong><br>機車位：${feature.properties.motorcycleSpaces}`);
+      layer.bindPopup(`<strong>${feature.properties.name}</strong><br>影像觀察候選：${feature.properties.motorcycleSpaces} 格`);
+      layer.on('click', () => showParkingDetail(feature.properties));
     }}).addTo(map);
     document.querySelector('.legend-count').textContent = `${observationFeatures.length} 個觀察群組（每組約 4 點）`;
     const estimatedCapacity = aggregate.streets.reduce((sum, street) => sum + street.motorcycleSpaces, 0);
-    const firstCapacity = document.querySelector('.parking-card strong');
-    const firstLabel = document.querySelector('.parking-card .parking-meta span');
-    if (firstCapacity) firstCapacity.textContent = `影像推估 ${estimatedCapacity} 格`;
-    if (firstLabel) firstLabel.textContent = '非即時資料 · ZenSVI';
+    document.querySelector('.legend-count').title = `影像推估候選機車位：${estimatedCapacity} 格（非官方容量）`;
+    map.on('click', hideParkingDetail);
     if (layer.getBounds().isValid()) map.fitBounds(layer.getBounds(), { padding: [25, 25] });
   }).catch(() => {
     L.marker([22.9957, 120.2153]).addTo(map).bindPopup('育樂街研究範圍').openPopup();
@@ -252,6 +299,8 @@ function openReportSheet(trigger) {
   photoInput.value = '';
   renderPhotoPreview([]);
   reportForm.dataset.parkingId = parkingId;
+    reportForm.dataset.currentCapacity = capacity;
+    layer.on('click', () => showParkingDetail(feature.properties));
   backdrop.classList.add('open');
   backdrop.setAttribute('aria-hidden', 'false');
 }
@@ -275,6 +324,7 @@ function renderPhotoPreview(files) {
 document.addEventListener('click', event => {
   const reportTrigger = event.target.closest('.report-link');
   if (reportTrigger) {
+    event.preventDefault();
     openReportSheet(reportTrigger);
     return;
   }
@@ -290,7 +340,8 @@ document.addEventListener('click', event => {
   if (reportAction) {
     const reportId = reportAction.dataset.reportId;
     const action = reportAction.dataset.reportAction;
-    applyReportDecision(reportId, action);
+    const correctedCapacity = document.querySelector(`[data-corrected-capacity-for="${reportId}"]`)?.value;
+    applyReportDecision(reportId, action, correctedCapacity);
     return;
   }
 
@@ -313,7 +364,22 @@ document.addEventListener('click', event => {
 });
 
 document.querySelector('#report-photo-input').addEventListener('change', event => {
-  const files = Array.from(event.target.files || []).slice(0, 3);
+  const selectedFiles = Array.from(event.target.files || []);
+  const invalidFile = selectedFiles.find(file => !file.type.startsWith('image/') || file.size > MAX_REPORT_PHOTO_BYTES);
+  if (invalidFile) {
+    event.target.value = '';
+    renderPhotoPreview([]);
+    toast.textContent = '請選擇 10 MB 以下的圖片檔案。';
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2600);
+    return;
+  }
+  const files = selectedFiles.slice(0, MAX_REPORT_PHOTOS);
+  if (selectedFiles.length > MAX_REPORT_PHOTOS) {
+    toast.textContent = `最多可上傳 ${MAX_REPORT_PHOTOS} 張照片。`;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2600);
+  }
   const dataTransfer = new DataTransfer();
   files.forEach(file => dataTransfer.items.add(file));
   event.target.files = dataTransfer.files;
@@ -325,7 +391,7 @@ document.querySelector('#report-form').addEventListener('submit', event => {
   const form = event.currentTarget;
   const parkingId = form.dataset.parkingId || 'yuleStreet';
   const capacityValue = Number(document.querySelector('#reported-capacity').value);
-  if (Number.isNaN(capacityValue) || capacityValue < 0) {
+  if (!Number.isInteger(capacityValue) || capacityValue < 0) {
     toast.textContent = '請輸入有效的機車位數量。';
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 2600);
@@ -338,7 +404,7 @@ document.querySelector('#report-form').addEventListener('submit', event => {
     id: `rpt-${Date.now()}`,
     parking_id: parkingId,
     user_id: 'anonymous-user',
-    current_capacity: Number(parkingLocationCatalog[parkingId]?.currentCapacity || 0),
+    current_capacity: Number(form.dataset.currentCapacity || parkingLocationCatalog[parkingId]?.currentCapacity || 0),
     reported_capacity: capacityValue,
     note: document.querySelector('#report-note').value.trim(),
     status: 'pending',
@@ -390,6 +456,7 @@ function renderAdminReports(filter = 'pending') {
         ${photos.length ? `<div class="admin-photo-grid">${photos.map(photo => `<img src="${photo}" alt="Report evidence">`).join('')}</div>` : '<p class="sheet-location">未上傳照片</p>'}
         ${report.note ? `<p class="sheet-location">補充說明：${report.note}</p>` : ''}
         <div class="admin-actions">
+          ${report.status === 'pending' ? `<label class="admin-capacity-field">核定容量 <input type="number" min="0" step="1" value="${report.reported_capacity}" data-corrected-capacity-for="${report.id}"></label>` : ''}
           <button class="approve-btn" data-report-action="approve" data-report-id="${report.id}">批准並更新<br><span class="secondary-text">Approve & Update</span></button>
           <button class="reject-btn" data-report-action="reject" data-report-id="${report.id}">拒絕<br><span class="secondary-text">Reject</span></button>
         </div>
@@ -398,18 +465,26 @@ function renderAdminReports(filter = 'pending') {
   }).join('');
 }
 
-function applyReportDecision(reportId, action) {
+function applyReportDecision(reportId, action, correctedCapacity) {
   const reports = getReports();
   const index = reports.findIndex(report => report.id === reportId);
   if (index === -1) return;
   const report = reports[index];
   if (action === 'approve') {
+    const approvedCapacity = Number(correctedCapacity ?? report.reported_capacity);
+    if (!Number.isInteger(approvedCapacity) || approvedCapacity < 0) {
+      toast.textContent = '請輸入有效的核定容量。';
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2600);
+      return;
+    }
     report.status = 'approved';
     report.reviewed_at = new Date().toISOString();
     report.reviewed_by = 'admin-demo';
+    report.approved_capacity = approvedCapacity;
     if (parkingLocationCatalog[report.parking_id]) {
-      parkingLocationCatalog[report.parking_id].currentCapacity = Number(report.reported_capacity);
-      parkingLocationCatalog[report.parking_id].source = 'admin_verified';
+      parkingLocationCatalog[report.parking_id].currentCapacity = approvedCapacity;
+      parkingLocationCatalog[report.parking_id].source = 'user_report_verified';
       parkingLocationCatalog[report.parking_id].updatedAt = formatDate(new Date().toISOString());
     }
     updateParkingCardDisplay();
