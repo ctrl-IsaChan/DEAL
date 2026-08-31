@@ -15,7 +15,8 @@ const YULE_STREET_ROADSIDE_BOUNDARY = [
   [120.21770, 22.99555],
   [120.21295, 22.99595]
 ];
-const YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS = { 4: 13, 24: 13 };
+const YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS = { 4: 13, 6: 39, 16: 18, 24: 13 };
+const YULE_STREET_MERGED_OBSERVATION_AREAS = { 7: { areas: [7, 25], motorcycleSpaces: 19 } };
 
 function isInsideYuleStreetRoadsideBoundary([longitude, latitude]) {
   let inside = false;
@@ -193,14 +194,16 @@ function initMap() {
   fetch('detection_points.geojson').then(response => response.json()).then(data => {
     const roadsideFeatures = data.features.filter(feature => isInsideYuleStreetRoadsideBoundary(feature.geometry.coordinates));
     const aggregate = ParkingAggregationService.aggregate(roadsideFeatures);
-    const observationFeatures = ParkingAggregationService.clusterForDisplay(roadsideFeatures).map((point, index) => {
+    const observationFeatures = ParkingAggregationService.clusterForDisplay(roadsideFeatures).flatMap((point, index) => {
       const observationArea = index + 1;
+      if (observationArea === 25) return [];
+      const mergedObservation = YULE_STREET_MERGED_OBSERVATION_AREAS[observationArea];
       return {
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] },
         properties: {
-          name: `育樂街路邊機車位觀察區 ${observationArea}`,
-          motorcycleSpaces: YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS[observationArea] ?? point.motorcycleSpaces,
+          name: `育樂街路邊機車位觀察區 ${mergedObservation ? mergedObservation.areas.join('、') : observationArea}`,
+          motorcycleSpaces: mergedObservation?.motorcycleSpaces ?? YULE_STREET_OBSERVATION_CAPACITY_CORRECTIONS[observationArea] ?? point.motorcycleSpaces,
           observationCount: point.observationCount
         }
       };
